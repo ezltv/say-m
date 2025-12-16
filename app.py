@@ -1,9 +1,12 @@
 from flask import Flask, render_template_string, request, jsonify, send_file
 from supabase import create_client, Client
+import speech_recognition as sr
+from pydub import AudioSegment
 import pandas as pd
 import re
 import os
 import time
+import io
 
 app = Flask(__name__)
 
@@ -16,36 +19,26 @@ if SUPABASE_URL and SUPABASE_KEY:
 else:
     print("UYARI: Supabase ayarları eksik!")
 
-# --- HTML ARAYÜZ (CANLI MONİTÖR EKLENDİ) ---
+# --- HTML ARAYÜZ (SERVER-SIDE KAYIT) ---
 html_code = """
 <!DOCTYPE html>
 <html>
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Stok Asistanı V5</title>
+    <title>Stok Asistanı (Server Mod)</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; text-align: center; padding: 10px; background: #f4f6f9; color: #333; }
         .card { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); margin-bottom: 20px; }
         
-        /* MİKROFON BUTONU */
         .mic-btn { 
             background: #007bff; color: white; border: none; 
-            width: 100%; height: 70px; border-radius: 12px; font-size: 22px; cursor: pointer; 
+            width: 100%; height: 80px; border-radius: 12px; font-size: 22px; cursor: pointer; 
             box-shadow: 0 4px 10px rgba(0,123,255,0.3); transition: all 0.2s; font-weight: bold;
             display: flex; align-items: center; justify-content: center; gap: 10px;
         }
         .mic-btn.recording { background: #dc3545; animation: pulse 1.5s infinite; }
         @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.8; } 100% { opacity: 1; } }
 
-        /* CANLI MONİTÖR (KAYIT ESNASINDA ÇIKAN EKRAN) */
-        .live-monitor {
-            background: #222; color: #0f0; font-family: 'Courier New', monospace;
-            padding: 15px; border-radius: 8px; margin-top: 15px; text-align: left;
-            min-height: 60px; font-size: 16px; display: none;
-            border: 2px solid #444;
-        }
-
-        /* EDİTÖR KUTUSU (KAYIT BİTİNCE ÇIKAN EKRAN) */
         .editor-box { display: none; margin-top: 20px; text-align: left; }
         textarea { width: 100%; height: 100px; padding: 10px; border: 2px solid #ddd; border-radius: 8px; font-size: 18px; font-family: sans-serif; box-sizing: border-box; }
         
@@ -55,37 +48,29 @@ html_code = """
         
         .log-item { background: #e9ecef; padding: 10px; margin: 5px 0; border-radius: 8px; font-size: 14px; text-align: left; border-left: 4px solid #007bff; }
         .btn-excel { background: #217346; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block; margin-top: 10px; }
-        
-        #debugLog { font-size: 10px; color: red; text-align: left; margin-top: 10px; display:block; }
+
+        /* YÜKLENİYOR SPINNER */
+        .loader { border: 5px solid #f3f3f3; border-top: 5px solid #007bff; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; display: none; margin: 10px auto; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
     <div class="card">
-        <h2>📦 Stok Sayım V5</h2>
+        <h2>📡 Stok Sayım (Server)</h2>
         
         <div id="micArea">
             <button id="micBtn" class="mic-btn" onclick="kaydiYonet()">
                 <span>🎙️</span> <span>KAYDI BAŞLAT</span>
             </button>
-            
+            <div id="loader" class="loader"></div>
             <div id="status" style="margin-top:10px; font-weight:bold; color:#555;">Hazır</div>
-
-            <div id="livePreview" class="live-monitor">...</div>
-            
-            <div id="debugLog"></div>
         </div>
 
         <div id="editorArea" class="editor-box">
-            <label>📝 Metni Onayla:</label>
-            <textarea id="textBox" placeholder="Ses buraya gelecek..."></textarea>
-            
-            <div style="margin-top:5px;">
-                <audio id="audioPreview" controls style="width:100%; height:30px;"></audio>
-            </div>
-
+            <textarea id="textBox" placeholder="Ses sunucuda işleniyor..."></textarea>
             <div class="action-btns">
-                <button class="btn-cancel" onclick="iptalEt()">SİL</button>
-                <button class="btn-confirm" onclick="sunucuyaGonder()">GÖNDER</button>
+                <button class="btn-cancel" onclick="iptalEt()">İPTAL</button>
+                <button class="btn-confirm" onclick="sunucuyaGonder()">KAYDET</button>
             </div>
         </div>
     </div>
@@ -97,170 +82,93 @@ html_code = """
     </div>
 
     <script>
-        let recognition;
         let mediaRecorder;
         let audioChunks = [];
         let isRecording = false;
-        let currentAudioBlob = null;
-        let final_transcript = '';
 
-        function logYaz(mesaj) {
-            document.getElementById("debugLog").innerText = mesaj;
-            console.log(mesaj);
-        }
-
-        // 1. Motor Kurulumu
-        if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
-            alert("Lütfen Chrome kullanın.");
-        } else {
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            recognition = new SpeechRecognition();
-            recognition.lang = 'tr-TR';
-            recognition.continuous = true;     
-            recognition.interimResults = true; 
-        }
-
-        // 2. Canlı Yazı Takibi
-        recognition.onresult = function(event) {
-            let interim = "";
-            for (let i = event.resultIndex; i < event.results.length; ++i) {
-                if (event.results[i].isFinal) {
-                    final_transcript += event.results[i][0].transcript;
-                } else {
-                    interim += event.results[i][0].transcript;
-                }
-            }
-            // CANLI MONİTÖRE YAZ
-            const fullText = final_transcript + interim;
-            document.getElementById("livePreview").innerText = fullText || "...";
-            
-            // Arka planda kutuya da hazırla
-            document.getElementById("textBox").value = fullText;
-        };
-        
-        recognition.onerror = function(event) {
-            logYaz("Mic Hatası: " + event.error);
-        };
-
-        // AÇ - KAPA YÖNETİCİSİ
-        function kaydiYonet() {
-            if (!isRecording) baslat();
-            else bitir();
-        }
-
-        async function baslat() {
-            isRecording = true;
-            final_transcript = '';
-            
-            // Arayüz Hazırlığı
-            document.getElementById("micBtn").innerHTML = "<span>⏹️</span> <span>BİTİR</span>";
-            document.getElementById("micBtn").classList.add("recording");
-            document.getElementById("status").innerText = "🔴 Dinliyorum...";
-            document.getElementById("livePreview").style.display = "block"; // EKRANI AÇ
-            document.getElementById("livePreview").innerText = "Ses bekleniyor...";
-            document.getElementById("textBox").value = "";
-
-            // Yazı Motoru Başlat
-            try { recognition.start(); } catch(e) {}
-
-            // Ses Kaydı Başlat
-            audioChunks = [];
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                mediaRecorder = new MediaRecorder(stream);
-                mediaRecorder.ondataavailable = event => { 
-                    if (event.data.size > 0) audioChunks.push(event.data); 
-                };
-                mediaRecorder.start();
-            } catch(e) { 
-                logYaz("Mikrofon izni yok veya engellendi.");
-                alert("Mikrofon izni verilmeli!");
-            }
-        }
-
-        function bitir() {
-            isRecording = false;
-            
-            document.getElementById("micBtn").innerHTML = "<span>🎙️</span> <span>KAYDI BAŞLAT</span>";
-            document.getElementById("micBtn").classList.remove("recording");
-            document.getElementById("status").innerText = "İşleniyor...";
-            
-            // Motorları Durdur
-            recognition.stop();
-            
-            // Ses kaydını güvenli durdur
-            if(mediaRecorder && mediaRecorder.state !== "inactive") {
-                mediaRecorder.stop();
+        async function kaydiYonet() {
+            if (!isRecording) {
+                // BAŞLAT
+                isRecording = true;
+                audioChunks = [];
+                document.getElementById("micBtn").innerHTML = "<span>⏹️</span> <span>KAYDI BİTİR</span>";
+                document.getElementById("micBtn").classList.add("recording");
+                document.getElementById("status").innerText = "🔴 Kayıt yapılıyor...";
                 
-                mediaRecorder.onstop = () => {
-                    // Ses dosyası varsa blob oluştur, yoksa null geç
-                    if (audioChunks.length > 0) {
-                        currentAudioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                        document.getElementById("audioPreview").src = URL.createObjectURL(currentAudioBlob);
-                    } else {
-                        currentAudioBlob = null;
-                        logYaz("Ses verisi boş geldi.");
-                    }
-                    ekranDegistir();
-                };
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    mediaRecorder = new MediaRecorder(stream);
+                    mediaRecorder.ondataavailable = event => { audioChunks.push(event.data); };
+                    mediaRecorder.start();
+                } catch(e) {
+                    alert("Mikrofon hatası: " + e);
+                    isRecording = false;
+                }
             } else {
-                // Eğer recorder hiç başlamadıysa bile ekranı değiştir
-                ekranDegistir();
+                // BİTİR VE GÖNDER
+                isRecording = false;
+                document.getElementById("micBtn").innerHTML = "<span>🎙️</span> <span>KAYDI BAŞLAT</span>";
+                document.getElementById("micBtn").classList.remove("recording");
+                document.getElementById("status").innerText = "⏳ Sunucuya gönderiliyor...";
+                document.getElementById("loader").style.display = "block";
+                
+                mediaRecorder.stop();
+                mediaRecorder.onstop = () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    sesiCozumle(audioBlob);
+                };
             }
         }
 
-        function ekranDegistir() {
-            // Biraz bekle ki son kelimeler de gelsin
-            setTimeout(() => {
+        function sesiCozumle(blob) {
+            const formData = new FormData();
+            formData.append("ses_dosyasi", blob, "kayit.webm");
+
+            fetch('/sesi_yaziya_cevir', { method: 'POST', body: formData })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById("loader").style.display = "none";
                 document.getElementById("micArea").style.display = "none";
                 document.getElementById("editorArea").style.display = "block";
-
-                // Eğer metin yoksa uyar
-                if(document.getElementById("textBox").value.trim() === "") {
-                    document.getElementById("textBox").placeholder = "Ses algılanmadı. Lütfen buraya elle yazın.";
+                
+                if(data.hata) {
+                    document.getElementById("textBox").value = "";
+                    document.getElementById("textBox").placeholder = "Hata: " + data.hata;
+                } else {
+                    document.getElementById("textBox").value = data.metin;
                 }
-            }, 800);
+            })
+            .catch(err => {
+                alert("Sunucu hatası: " + err);
+                document.getElementById("loader").style.display = "none";
+            });
         }
 
         function iptalEt() {
             document.getElementById("editorArea").style.display = "none";
             document.getElementById("micArea").style.display = "block";
-            document.getElementById("livePreview").style.display = "none";
             document.getElementById("status").innerText = "Hazır.";
             document.getElementById("textBox").value = "";
-            document.getElementById("debugLog").innerText = "";
-            final_transcript = "";
-            currentAudioBlob = null;
         }
 
         function sunucuyaGonder() {
             const editedText = document.getElementById("textBox").value;
+            if (editedText.length < 1) { alert("Metin boş!"); return; }
             
-            // Metin boşsa uyar ama ses göndermeye izin ver (opsiyonel)
-            if (editedText.length < 1 && !currentAudioBlob) {
-                alert("Ne ses var ne yazı! Birini girmen lazım.");
-                return;
-            }
+            document.getElementById("status").innerText = "Veritabanına işleniyor...";
             
-            document.getElementById("status").innerText = "Gönderiliyor...";
-            const formData = new FormData();
-            
-            if (currentAudioBlob) {
-                formData.append("ses_dosyasi", currentAudioBlob, "kayit.webm");
-            }
-            formData.append("metin", editedText);
-
-            fetch('/analiz', { method: 'POST', body: formData })
+            fetch('/kaydet', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ metin: editedText })
+            })
             .then(response => response.json())
             .then(data => {
                 iptalEt(); 
-                document.getElementById("status").innerText = "✅ Kaydedildi!";
-                
-                let playerHtml = data.ses_url ? `<br><audio controls src="${data.ses_url}"></audio>` : "";
-                const logHtml = `<div class="log-item"><b>${data.urun}</b><br>Adet: ${data.adet} | Kağıt: ${data.kagit}${playerHtml}</div>`;
+                document.getElementById("status").innerText = "✅ Kayıt Başarılı!";
+                const logHtml = `<div class="log-item"><b>${data.urun_adi}</b><br>Adet: ${data.adet} | Kağıt: ${data.kagit_no}</div>`;
                 document.getElementById("logArea").innerHTML = logHtml + document.getElementById("logArea").innerHTML;
-            })
-            .catch(err => { alert("Hata: " + err); iptalEt(); });
+            });
         }
     </script>
 </body>
@@ -271,21 +179,38 @@ html_code = """
 def home():
     return render_template_string(html_code)
 
-@app.route("/analiz", methods=["POST"])
-def analiz():
-    metin = request.form.get("metin", "").upper()
-    ses_dosyasi = request.files.get("ses_dosyasi")
+@app.route("/sesi_yaziya_cevir", methods=["POST"])
+def sesi_yaziya_cevir():
+    if 'ses_dosyasi' not in request.files:
+        return jsonify({"hata": "Dosya yok"})
     
-    public_ses_url = ""
-    if ses_dosyasi and SUPABASE_URL:
-        try:
-            dosya_ismi = f"kayit_{int(time.time())}.webm"
-            supabase.storage.from_("ses-kayitlari").upload(dosya_ismi, ses_dosyasi.read(), {"content-type": "audio/webm"})
-            public_ses_url = supabase.storage.from_("ses-kayitlari").get_public_url(dosya_ismi)
-        except Exception as e:
-            print(f"Ses yükleme hatası: {e}")
+    file = request.files['ses_dosyasi']
+    
+    try:
+        # 1. WebM dosyasını WAV'a çevir (Python tarafında)
+        audio = AudioSegment.from_file(file)
+        wav_io = io.BytesIO()
+        audio.export(wav_io, format="wav")
+        wav_io.seek(0)
+        
+        # 2. Google Speech Recognition (Backend)
+        r = sr.Recognizer()
+        with sr.AudioFile(wav_io) as source:
+            audio_data = r.record(source)
+            text = r.recognize_google(audio_data, language="tr-TR")
+            
+        return jsonify({"metin": text.upper()})
+        
+    except Exception as e:
+        print("Hata:", e)
+        return jsonify({"hata": "Ses anlaşılamadı veya format sorunu."})
 
-    # --- AYRIŞTIRMA ---
+@app.route("/kaydet", methods=["POST"])
+def kaydet():
+    data = request.json
+    metin = data.get("metin", "").upper()
+    
+    # --- AYRIŞTIRMA MANTIĞI ---
     miktar = 1
     miktar_match = re.search(r'(\d+)\s*(ADET|TANE)', metin)
     if miktar_match:
@@ -314,7 +239,7 @@ def analiz():
 
     veri = {
         "kagit_no": kagit, "urun_adi": urun_adi, "adet": miktar,
-        "ham_ses": request.form.get("metin", ""), "ses_url": public_ses_url
+        "ham_ses": metin, "ses_url": "Server-Mode"
     }
     
     if SUPABASE_URL:
@@ -327,14 +252,8 @@ def indir_excel():
     if not SUPABASE_URL: return "Veritabanı bağlı değil"
     response = supabase.table("stok_loglari").select("*").order("created_at", desc=True).execute()
     df = pd.DataFrame(response.data)
-    
-    column_mapping = {
-        "created_at": "TARİH", "kagit_no": "KAĞIT NO", "urun_adi": "ÜRÜN ADI",
-        "adet": "ADET", "ham_ses": "GİRİLEN METİN", "ses_url": "SES KAYDI LİNKİ", "id": "ID"
-    }
-    df = df.rename(columns=column_mapping)
-    df.to_excel("stok_sesli.xlsx", index=False)
-    return send_file("stok_sesli.xlsx", as_attachment=True)
+    df.to_excel("stok_server.xlsx", index=False)
+    return send_file("stok_server.xlsx", as_attachment=True)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
