@@ -22,15 +22,16 @@ html_code = """
 <html>
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Akıllı Depo 4.0 PRO+</title>
+    <title>Stok Asistanı (Hibrit Mod)</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; text-align: center; padding: 10px; background: #f4f6f9; color: #333; }
         .card { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); margin-bottom: 20px; }
         
+        /* MİKROFON BUTONU */
         .mic-btn { 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; 
-            width: 80px; height: 80px; border-radius: 50%; font-size: 30px; cursor: pointer; 
-            box-shadow: 0 5px 15px rgba(118, 75, 162, 0.4); transition: transform 0.2s;
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); color: white; border: none; 
+            width: 90px; height: 90px; border-radius: 50%; font-size: 35px; cursor: pointer; 
+            box-shadow: 0 5px 15px rgba(56, 239, 125, 0.4); transition: transform 0.2s;
             user-select: none; -webkit-user-select: none;
             -webkit-tap-highlight-color: transparent;
         }
@@ -45,14 +46,14 @@ html_code = """
         .btn-confirm { flex: 1; background: #28a745; color: white; border: none; padding: 12px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 16px; }
         .btn-cancel { flex: 1; background: #dc3545; color: white; border: none; padding: 12px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 16px; }
         
-        .log-item { background: #e9ecef; padding: 10px; margin: 5px 0; border-radius: 8px; font-size: 14px; text-align: left; border-left: 4px solid #764ba2; }
+        .log-item { background: #e9ecef; padding: 10px; margin: 5px 0; border-radius: 8px; font-size: 14px; text-align: left; border-left: 4px solid #11998e; }
         .btn-excel { background: #217346; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block; margin-top: 10px; }
         audio { width: 100%; margin-top: 5px; height: 30px; }
     </style>
 </head>
 <body>
     <div class="card">
-        <h2>🎤 Akıllı Kayıt</h2>
+        <h2>🎤 Stok Asistanı</h2>
         <div id="micArea">
             <p style="color:#888; font-size:14px;">Basılı Tut ve Konuş</p>
             <button id="micBtn" class="mic-btn" onmousedown="baslat(event)" onmouseup="bitir(event)" ontouchstart="baslat(event)" ontouchend="bitir(event)">🎙️</button>
@@ -60,8 +61,8 @@ html_code = """
         </div>
 
         <div id="editorArea" class="editor-box">
-            <label style="font-size:12px; font-weight:bold; color:#666;">📝 Metni Kontrol Et / Düzenle:</label>
-            <textarea id="textBox"></textarea>
+            <label style="font-size:12px; font-weight:bold; color:#666;">📝 Anlaşılan Metin:</label>
+            <textarea id="textBox" placeholder="Ses metne çevrilemediyse buraya yazabilirsin..."></textarea>
             
             <div style="margin-top:5px;">
                 <label style="font-size:12px; font-weight:bold; color:#666;">🔊 Ses Kaydı:</label>
@@ -70,13 +71,13 @@ html_code = """
 
             <div class="action-btns">
                 <button class="btn-cancel" onclick="iptalEt()">❌ İptal</button>
-                <button class="btn-confirm" onclick="sunucuyaGonder()">✅ Onayla ve Gönder</button>
+                <button class="btn-confirm" onclick="sunucuyaGonder()">✅ Kaydet</button>
             </div>
         </div>
     </div>
 
     <div class="card">
-        <h3>📊 Son Eklenenler</h3>
+        <h3>📊 Kayıtlar</h3>
         <div id="logArea"></div>
         <br>
         <a href="/indir_excel" class="btn-excel" target="_blank">📥 Excel İndir</a>
@@ -90,33 +91,33 @@ html_code = """
         let currentAudioBlob = null;
         let final_transcript = '';
 
-        // Tarayıcı Kontrolü
+        // 1. Tarayıcı Motorunu Ayarla
         if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
-            alert("Lütfen Google Chrome kullanın. (iPhone'da Safari çalışmayabilir)");
+            alert("Bu özellik için Google Chrome kullanmalısın.");
         } else {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             recognition = new SpeechRecognition();
             recognition.lang = 'tr-TR';
-            recognition.continuous = true; 
-            recognition.interimResults = true; 
+            recognition.continuous = true;     // Sürekli dinle
+            recognition.interimResults = true; // Anlık tahminleri getir
+            recognition.maxAlternatives = 1;
         }
 
         async function baslat(event) {
             if (isRecording) return;
-            if (event) event.preventDefault(); // Sayfa kaymasını engelle
+            if (event) event.preventDefault();
             
             isRecording = true;
-            final_transcript = ''; 
+            final_transcript = '';
             
-            // Arayüzü Temizle
             document.getElementById("textBox").value = "";
             document.getElementById("micBtn").classList.add("listening");
-            document.getElementById("status").innerText = "Dinliyorum...";
+            document.getElementById("status").innerText = "🔴 Kayıt Başladı...";
 
-            // Yazı Motorunu Başlat
-            try { recognition.start(); } catch(e) { console.log("Mic zaten açık"); }
+            // Yazı motorunu başlat (Hata verirse yut, durmasın)
+            try { recognition.start(); } catch(e) { console.log("Mic zaten aktif"); }
 
-            // Ses Kayıt Motorunu Başlat
+            // Ses dosyası kaydını başlat
             audioChunks = [];
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -124,10 +125,10 @@ html_code = """
                 mediaRecorder.ondataavailable = event => { audioChunks.push(event.data); };
                 mediaRecorder.start();
             } catch(e) {
-                console.error("Mic izni yok:", e);
+                alert("Mikrofon izni verilmedi!");
             }
 
-            // --- GELİŞTİRİLMİŞ YAZI YAKALAMA ---
+            // Metni Yakala (Canlı)
             recognition.onresult = function(event) {
                 let interim_transcript = '';
                 for (let i = event.resultIndex; i < event.results.length; ++i) {
@@ -137,13 +138,7 @@ html_code = """
                         interim_transcript += event.results[i][0].transcript;
                     }
                 }
-                // Anlık olarak kutuya yaz
                 document.getElementById("textBox").value = final_transcript + interim_transcript;
-            };
-            
-            // Hata olursa kullanıcıyı bilgilendir
-            recognition.onerror = function(event) {
-                console.log("Ses hatası:", event.error);
             };
         }
 
@@ -152,36 +147,36 @@ html_code = """
             if (event) event.preventDefault();
             
             isRecording = false;
-
             document.getElementById("micBtn").classList.remove("listening");
-            document.getElementById("status").innerText = "İşleniyor...";
+            document.getElementById("status").innerText = "⏳ İşleniyor...";
 
-            // Mikrofonu durdur
-            recognition.stop();
-            
-            if(mediaRecorder && mediaRecorder.state !== "inactive") {
-                mediaRecorder.stop();
-            }
-
-            // GECİKME AYARI: Yazının gelmesi için ufak bir bekleme (500ms)
+            // KRİTİK NOKTA: Yazı motorunu HEMEN durdurma!
+            // Google'dan son kelimelerin gelmesi için 1.5 saniye bekle.
             setTimeout(() => {
-                if(mediaRecorder) {
-                    // Kayıt bittiğinde çalışacak kodlar
-                    currentAudioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                    document.getElementById("audioPreview").src = URL.createObjectURL(currentAudioBlob);
-                    
-                    // Ekranları değiştir
-                    document.getElementById("micArea").style.display = "none";
-                    document.getElementById("editorArea").style.display = "block";
-                    
-                    // Eğer hala boşsa o zaman uyar (Ama placeholder'ı bozma)
-                    if(document.getElementById("textBox").value.trim() === "") {
-                         document.getElementById("status").innerText = "⚠️ Ses algılanmadı, elle yazabilirsin.";
-                    } else {
-                         document.getElementById("status").innerText = "Lütfen metni kontrol et.";
-                    }
+                recognition.stop(); 
+                
+                // Ses dosyasını durdur ve hazırla
+                if(mediaRecorder && mediaRecorder.state !== "inactive") {
+                    mediaRecorder.stop();
                 }
-            }, 500); // Yarım saniye bekle ki Google yazıyı göndersin
+
+                if(mediaRecorder) {
+                    mediaRecorder.onstop = () => {
+                        currentAudioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                        document.getElementById("audioPreview").src = URL.createObjectURL(currentAudioBlob);
+                        
+                        // Ekran değiştir
+                        document.getElementById("micArea").style.display = "none";
+                        document.getElementById("editorArea").style.display = "block";
+                        
+                        // Durum mesajını güncelle
+                        const textVal = document.getElementById("textBox").value.trim();
+                        if(textVal === "") {
+                             document.getElementById("textBox").placeholder = "Metin otomatik gelmedi, buraya yazabilirsin...";
+                        }
+                    };
+                }
+            }, 1500); // 1.5 Saniye Gecikmeli Kapanış
         }
 
         function iptalEt() {
@@ -196,12 +191,13 @@ html_code = """
         function sunucuyaGonder() {
             const editedText = document.getElementById("textBox").value;
             
-            if (editedText.length < 1) {
-                alert("Metin boş olamaz! Lütfen yazın veya tekrar konuşun.");
+            // Boş metin kontrolünü kaldırdım, belki sadece ses atmak istersin
+            // Ama yine de uyarı verelim
+            if (editedText.length < 1 && !confirm("Metin kutusu boş. Sadece ses kaydedilsin mi?")) {
                 return;
             }
             
-            document.getElementById("status").innerText = "Gönderiliyor...";
+            document.getElementById("status").innerText = "🚀 Gönderiliyor...";
             const formData = new FormData();
             
             if (currentAudioBlob) {
@@ -246,12 +242,15 @@ def analiz():
     if ses_dosyasi and SUPABASE_URL:
         try:
             dosya_ismi = f"kayit_{int(time.time())}.webm"
+            # Supabase'e yükle
             supabase.storage.from_("ses-kayitlari").upload(dosya_ismi, ses_dosyasi.read(), {"content-type": "audio/webm"})
+            # Linki al
             public_ses_url = supabase.storage.from_("ses-kayitlari").get_public_url(dosya_ismi)
         except Exception as e:
             print(f"Ses yükleme hatası: {e}")
 
-    # --- AYRIŞTIRMA ---
+    # --- JARGON ÇEVİRİCİ ---
+    # 1. Miktar
     miktar = 1
     miktar_match = re.search(r'(\d+)\s*(ADET|TANE)', metin)
     if miktar_match:
@@ -260,25 +259,30 @@ def analiz():
     else:
         metin_temiz = metin
 
+    # 2. Kağıt No
     kagit = "-"
     kagit_match = re.search(r'KAĞIT\s*(\d+)', metin_temiz)
     if kagit_match:
         kagit = kagit_match.group(1)
         metin_temiz = metin_temiz.replace(kagit_match.group(0), "")
 
-    # Plaka Tanıma
+    # 3. Plaka
     plaka_match = re.search(r'\b(\d{1,3})\s+(\d{3,4})\s+(\d{3,4})\b', metin_temiz)
     if plaka_match:
         yeni_format = f"HRS {plaka_match.group(1)} MM {plaka_match.group(2)}X{plaka_match.group(3)}"
         metin_temiz = metin_temiz.replace(plaka_match.group(0), yeni_format)
 
-    # Jargon
-    sozluk = { "A ": "HEA ", "B ": "HEB ", "ST 44": "S275JR", "ST 37": "S235JR", "ST 52": "S355JR", "BOY": "MT", "PLAKA": "HRS", "ON": "10", "YÜZ": "100" }
+    # 4. Kelime Değiştirme
+    sozluk = { 
+        "A ": "HEA ", "B ": "HEB ", "ST 44": "S275JR", "ST 37": "S235JR", 
+        "ST 52": "S355JR", "BOY": "MT", "PLAKA": "HRS", "ON": "10", "YÜZ": "100" 
+    }
     for k, v in sozluk.items():
         metin_temiz = metin_temiz.replace(k, v)
         
     urun_adi = " ".join(metin_temiz.split())
     
+    # Veritabanına Yaz
     veri = {
         "kagit_no": kagit,
         "urun_adi": urun_adi,
@@ -298,6 +302,7 @@ def indir_excel():
     response = supabase.table("stok_loglari").select("*").order("created_at", desc=True).execute()
     df = pd.DataFrame(response.data)
     
+    # Sütunları Türkçeleştir
     column_mapping = {
         "created_at": "TARİH",
         "kagit_no": "KAĞIT NO",
@@ -308,6 +313,7 @@ def indir_excel():
         "id": "ID"
     }
     df = df.rename(columns=column_mapping)
+    
     df.to_excel("stok_sesli.xlsx", index=False)
     return send_file("stok_sesli.xlsx", as_attachment=True)
 
