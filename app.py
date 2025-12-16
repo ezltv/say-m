@@ -39,9 +39,11 @@ html_code = """
 
         .editor-box { display: none; margin-top: 20px; text-align: left; }
         textarea { width: 100%; height: 80px; padding: 10px; border: 2px solid #ddd; border-radius: 8px; font-size: 16px; font-family: sans-serif; box-sizing: border-box; }
+        
         .action-btns { margin-top: 10px; display: flex; gap: 10px; }
         .btn-confirm { flex: 1; background: #28a745; color: white; border: none; padding: 12px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 16px; }
         .btn-cancel { flex: 1; background: #dc3545; color: white; border: none; padding: 12px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 16px; }
+        
         .log-item { background: #e9ecef; padding: 10px; margin: 5px 0; border-radius: 8px; font-size: 14px; text-align: left; border-left: 4px solid #764ba2; }
         .btn-excel { background: #217346; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block; margin-top: 10px; }
         audio { width: 100%; margin-top: 5px; height: 30px; }
@@ -57,15 +59,17 @@ html_code = """
         </div>
 
         <div id="editorArea" class="editor-box">
-            <label style="font-size:12px; font-weight:bold; color:#666;">📝 Metni Düzenle:</label>
+            <label style="font-size:12px; font-weight:bold; color:#666;">📝 Metni Kontrol Et / Düzenle:</label>
             <textarea id="textBox"></textarea>
+            
             <div style="margin-top:5px;">
                 <label style="font-size:12px; font-weight:bold; color:#666;">🔊 Ses Kaydı:</label>
                 <audio id="audioPreview" controls src=""></audio>
             </div>
+
             <div class="action-btns">
                 <button class="btn-cancel" onclick="iptalEt()">❌ İptal</button>
-                <button class="btn-confirm" onclick="sunucuyaGonder()">✅ Gönder</button>
+                <button class="btn-confirm" onclick="sunucuyaGonder()">✅ Onayla ve Gönder</button>
             </div>
         </div>
     </div>
@@ -83,6 +87,9 @@ html_code = """
         let audioChunks = [];
         let isRecording = false;
         let currentAudioBlob = null;
+        
+        // HATA DÜZELTME: Bu değişken artık Global, yani unutmuyor!
+        let final_transcript = ''; 
 
         if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
             alert("Lütfen Google Chrome kullanın.");
@@ -97,9 +104,12 @@ html_code = """
         async function baslat() {
             if (isRecording) return;
             isRecording = true;
+            
+            // Sıfırlama işlemleri
+            final_transcript = ''; 
+            document.getElementById("textBox").value = "";
             document.getElementById("micBtn").classList.add("listening");
             document.getElementById("status").innerText = "Dinliyorum...";
-            document.getElementById("textBox").value = "";
 
             try { recognition.start(); } catch(e) {}
 
@@ -109,27 +119,37 @@ html_code = """
             mediaRecorder.ondataavailable = event => { audioChunks.push(event.data); };
             mediaRecorder.start();
             
+            // --- DÜZELTİLEN KISIM ---
             recognition.onresult = function(event) {
-                let finalTranscript = '';
-                let interimTranscript = '';
+                let interim_transcript = '';
+                
                 for (let i = event.resultIndex; i < event.results.length; ++i) {
-                    if (event.results[i].isFinal) { finalTranscript += event.results[i][0].transcript; } 
-                    else { interimTranscript += event.results[i][0].transcript; }
+                    if (event.results[i].isFinal) {
+                        final_transcript += event.results[i][0].transcript;
+                    } else {
+                        interim_transcript += event.results[i][0].transcript;
+                    }
                 }
-                document.getElementById("textBox").value = finalTranscript + interimTranscript;
+                // Anlık olarak kutuya yaz (Hafızadaki + Şuan duyduğu)
+                document.getElementById("textBox").value = final_transcript + interim_transcript;
             };
         }
 
         function bitir() {
             if (!isRecording) return;
             isRecording = false;
+
             document.getElementById("micBtn").classList.remove("listening");
             document.getElementById("status").innerText = "Kayıt Bitti. Kontrol Et.";
+
             recognition.stop();
             mediaRecorder.stop();
+
             mediaRecorder.onstop = () => {
                 currentAudioBlob = new Blob(audioChunks, { type: 'audio/webm' });
                 document.getElementById("audioPreview").src = URL.createObjectURL(currentAudioBlob);
+                
+                // Ekranları değiştir
                 document.getElementById("micArea").style.display = "none";
                 document.getElementById("editorArea").style.display = "block";
             };
@@ -140,17 +160,22 @@ html_code = """
             document.getElementById("micArea").style.display = "block";
             document.getElementById("status").innerText = "Hazır.";
             document.getElementById("textBox").value = "";
+            final_transcript = "";
             currentAudioBlob = null;
         }
 
         function sunucuyaGonder() {
             const editedText = document.getElementById("textBox").value;
-            if (editedText.length < 2) { alert("Metin çok kısa!"); return; }
             
-            document.getElementById("status").innerText = "Gönderiliyor...";
+            if (editedText.length < 2) {
+                alert("Metin çok kısa veya boş!");
+                return;
+            }
+            
+            document.getElementById("status").innerText = "Sunucuya gönderiliyor...";
             const formData = new FormData();
             formData.append("ses_dosyasi", currentAudioBlob, "kayit.webm");
-            formData.append("metin", editedText);
+            formData.append("metin", editedText); // Senin düzelttiğin metni gönderir
 
             fetch('/analiz', { method: 'POST', body: formData })
             .then(response => response.json())
@@ -160,7 +185,10 @@ html_code = """
                 const logHtml = `<div class="log-item"><b>${data.urun}</b><br>Adet: ${data.adet} | Kağıt: ${data.kagit}<br><audio controls src="${data.ses_url}"></audio></div>`;
                 document.getElementById("logArea").innerHTML = logHtml + document.getElementById("logArea").innerHTML;
             })
-            .catch(err => { alert("Hata: " + err); iptalEt(); });
+            .catch(err => {
+                alert("Hata: " + err);
+                iptalEt();
+            });
         }
     </script>
 </body>
@@ -173,6 +201,7 @@ def home():
 
 @app.route("/analiz", methods=["POST"])
 def analiz():
+    # Frontend'den gelen DÜZENLENMİŞ metni al
     metin = request.form.get("metin", "").upper()
     ses_dosyasi = request.files.get("ses_dosyasi")
     
@@ -185,30 +214,43 @@ def analiz():
         except Exception as e:
             print(f"Ses yükleme hatası: {e}")
 
-    # Yapay Zeka (Regex)
+    # --- AYRIŞTIRMA MANTIĞI ---
+    
+    # 1. Miktar Bul
     miktar = 1
     miktar_match = re.search(r'(\d+)\s*(ADET|TANE)', metin)
     if miktar_match:
         miktar = int(miktar_match.group(1))
         metin = metin.replace(miktar_match.group(0), "") 
         
+    # 2. Kağıt No Bul
     kagit = "-"
     kagit_match = re.search(r'KAĞIT\s*(\d+)', metin)
     if kagit_match:
         kagit = kagit_match.group(1)
         metin = metin.replace(kagit_match.group(0), "")
 
+    # 3. Plaka Tanıma
     plaka_match = re.search(r'\b(\d{1,3})\s+(\d{3,4})\s+(\d{3,4})\b', metin)
     if plaka_match:
         yeni_format = f"HRS {plaka_match.group(1)} MM {plaka_match.group(2)}X{plaka_match.group(3)}"
         metin = metin.replace(plaka_match.group(0), yeni_format)
 
+    # 4. Jargon Çeviri
     sozluk = { "A ": "HEA ", "B ": "HEB ", "ST 44": "S275JR", "ST 37": "S235JR", "ST 52": "S355JR", "BOY": "MT", "PLAKA": "HRS", "ON": "10", "YÜZ": "100" }
-    for k, v in sozluk.items(): metin = metin.replace(k, v)
+    for k, v in sozluk.items():
+        metin = metin.replace(k, v)
         
     urun_adi = " ".join(metin.split())
     
-    veri = { "kagit_no": kagit, "urun_adi": urun_adi, "adet": miktar, "ham_ses": request.form.get("metin", ""), "ses_url": public_ses_url }
+    # Veritabanına Kayıt
+    veri = {
+        "kagit_no": kagit,
+        "urun_adi": urun_adi,
+        "adet": miktar,
+        "ham_ses": request.form.get("metin", ""), # Senin düzelttiğin hali
+        "ses_url": public_ses_url
+    }
     
     if SUPABASE_URL:
         supabase.table("stok_loglari").insert(veri).execute()
