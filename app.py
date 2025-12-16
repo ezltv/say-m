@@ -87,8 +87,6 @@ html_code = """
         let audioChunks = [];
         let isRecording = false;
         let currentAudioBlob = null;
-        
-        // HATA DÜZELTME: Bu değişken artık Global, yani unutmuyor!
         let final_transcript = ''; 
 
         if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
@@ -105,7 +103,6 @@ html_code = """
             if (isRecording) return;
             isRecording = true;
             
-            // Sıfırlama işlemleri
             final_transcript = ''; 
             document.getElementById("textBox").value = "";
             document.getElementById("micBtn").classList.add("listening");
@@ -119,10 +116,8 @@ html_code = """
             mediaRecorder.ondataavailable = event => { audioChunks.push(event.data); };
             mediaRecorder.start();
             
-            // --- DÜZELTİLEN KISIM ---
             recognition.onresult = function(event) {
                 let interim_transcript = '';
-                
                 for (let i = event.resultIndex; i < event.results.length; ++i) {
                     if (event.results[i].isFinal) {
                         final_transcript += event.results[i][0].transcript;
@@ -130,7 +125,6 @@ html_code = """
                         interim_transcript += event.results[i][0].transcript;
                     }
                 }
-                // Anlık olarak kutuya yaz (Hafızadaki + Şuan duyduğu)
                 document.getElementById("textBox").value = final_transcript + interim_transcript;
             };
         }
@@ -148,8 +142,6 @@ html_code = """
             mediaRecorder.onstop = () => {
                 currentAudioBlob = new Blob(audioChunks, { type: 'audio/webm' });
                 document.getElementById("audioPreview").src = URL.createObjectURL(currentAudioBlob);
-                
-                // Ekranları değiştir
                 document.getElementById("micArea").style.display = "none";
                 document.getElementById("editorArea").style.display = "block";
             };
@@ -166,16 +158,12 @@ html_code = """
 
         function sunucuyaGonder() {
             const editedText = document.getElementById("textBox").value;
-            
-            if (editedText.length < 2) {
-                alert("Metin çok kısa veya boş!");
-                return;
-            }
+            if (editedText.length < 2) { alert("Metin çok kısa veya boş!"); return; }
             
             document.getElementById("status").innerText = "Sunucuya gönderiliyor...";
             const formData = new FormData();
             formData.append("ses_dosyasi", currentAudioBlob, "kayit.webm");
-            formData.append("metin", editedText); // Senin düzelttiğin metni gönderir
+            formData.append("metin", editedText);
 
             fetch('/analiz', { method: 'POST', body: formData })
             .then(response => response.json())
@@ -185,10 +173,7 @@ html_code = """
                 const logHtml = `<div class="log-item"><b>${data.urun}</b><br>Adet: ${data.adet} | Kağıt: ${data.kagit}<br><audio controls src="${data.ses_url}"></audio></div>`;
                 document.getElementById("logArea").innerHTML = logHtml + document.getElementById("logArea").innerHTML;
             })
-            .catch(err => {
-                alert("Hata: " + err);
-                iptalEt();
-            });
+            .catch(err => { alert("Hata: " + err); iptalEt(); });
         }
     </script>
 </body>
@@ -201,7 +186,6 @@ def home():
 
 @app.route("/analiz", methods=["POST"])
 def analiz():
-    # Frontend'den gelen DÜZENLENMİŞ metni al
     metin = request.form.get("metin", "").upper()
     ses_dosyasi = request.files.get("ses_dosyasi")
     
@@ -214,41 +198,40 @@ def analiz():
         except Exception as e:
             print(f"Ses yükleme hatası: {e}")
 
-    # --- AYRIŞTIRMA MANTIĞI ---
-    
-    # 1. Miktar Bul
+    # --- AYRIŞTIRMA ---
     miktar = 1
     miktar_match = re.search(r'(\d+)\s*(ADET|TANE)', metin)
     if miktar_match:
         miktar = int(miktar_match.group(1))
-        metin = metin.replace(miktar_match.group(0), "") 
-        
-    # 2. Kağıt No Bul
+        metin_no_miktar = metin.replace(miktar_match.group(0), "") 
+    else:
+        metin_no_miktar = metin
+
     kagit = "-"
-    kagit_match = re.search(r'KAĞIT\s*(\d+)', metin)
+    kagit_match = re.search(r'KAĞIT\s*(\d+)', metin_no_miktar)
     if kagit_match:
         kagit = kagit_match.group(1)
-        metin = metin.replace(kagit_match.group(0), "")
+        metin_no_miktar = metin_no_miktar.replace(kagit_match.group(0), "")
 
-    # 3. Plaka Tanıma
-    plaka_match = re.search(r'\b(\d{1,3})\s+(\d{3,4})\s+(\d{3,4})\b', metin)
+    # Jargon Çevirisi (Ürün Adı Oluşturma)
+    islenen_metin = metin_no_miktar
+    plaka_match = re.search(r'\b(\d{1,3})\s+(\d{3,4})\s+(\d{3,4})\b', islenen_metin)
     if plaka_match:
         yeni_format = f"HRS {plaka_match.group(1)} MM {plaka_match.group(2)}X{plaka_match.group(3)}"
-        metin = metin.replace(plaka_match.group(0), yeni_format)
+        islenen_metin = islenen_metin.replace(plaka_match.group(0), yeni_format)
 
-    # 4. Jargon Çeviri
     sozluk = { "A ": "HEA ", "B ": "HEB ", "ST 44": "S275JR", "ST 37": "S235JR", "ST 52": "S355JR", "BOY": "MT", "PLAKA": "HRS", "ON": "10", "YÜZ": "100" }
     for k, v in sozluk.items():
-        metin = metin.replace(k, v)
+        islenen_metin = islenen_metin.replace(k, v)
         
-    urun_adi = " ".join(metin.split())
+    urun_adi = " ".join(islenen_metin.split())
     
     # Veritabanına Kayıt
     veri = {
         "kagit_no": kagit,
         "urun_adi": urun_adi,
         "adet": miktar,
-        "ham_ses": request.form.get("metin", ""), # Senin düzelttiğin hali
+        "ham_ses": request.form.get("metin", ""), # Senin düzenlediğin orijinal metin
         "ses_url": public_ses_url
     }
     
@@ -260,9 +243,25 @@ def analiz():
 @app.route("/indir_excel")
 def indir_excel():
     if not SUPABASE_URL: return "Veritabanı bağlı değil"
+    
+    # Verileri çek
     response = supabase.table("stok_loglari").select("*").order("created_at", desc=True).execute()
     df = pd.DataFrame(response.data)
-    if "ham_ses" in df.columns: df = df.drop(columns=["ham_ses"])
+    
+    # --- BURAYI DÜZENLEDİM: Sütun İsimlerini Güzelleştir ---
+    column_mapping = {
+        "created_at": "TARİH",
+        "kagit_no": "KAĞIT NO",
+        "urun_adi": "ÜRÜN ADI",
+        "adet": "ADET",
+        "ham_ses": "GİRİLEN METİN",   # <-- ARTIK SİLİNMİYOR, ADI DEĞİŞİYOR
+        "ses_url": "SES KAYDI LİNKİ",
+        "id": "ID"
+    }
+    
+    # Sadece veritabanında var olan sütunları yeniden adlandır
+    df = df.rename(columns=column_mapping)
+    
     df.to_excel("stok_sesli.xlsx", index=False)
     return send_file("stok_sesli.xlsx", as_attachment=True)
 
