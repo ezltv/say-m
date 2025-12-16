@@ -31,7 +31,7 @@ html_code = """
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; 
             width: 80px; height: 80px; border-radius: 50%; font-size: 30px; cursor: pointer; 
             box-shadow: 0 5px 15px rgba(118, 75, 162, 0.4); transition: transform 0.2s;
-            user-select: none; -webkit-user-select: none;
+            user-select: none; -webkit-user-select: none; /* Mobilde seçimi engelle */
         }
         .mic-btn:active { transform: scale(0.95); }
         .mic-btn.listening { animation: pulse 1.5s infinite; background: #ff416c; }
@@ -59,7 +59,7 @@ html_code = """
         </div>
 
         <div id="editorArea" class="editor-box">
-            <label style="font-size:12px; font-weight:bold; color:#666;">📝 Metni Kontrol Et / Düzenle:</label>
+            <label style="font-size:12px; font-weight:bold; color:#666;">📝 Metni Düzenle:</label>
             <textarea id="textBox"></textarea>
             
             <div style="margin-top:5px;">
@@ -87,7 +87,10 @@ html_code = """
         let audioChunks = [];
         let isRecording = false;
         let currentAudioBlob = null;
-        let final_transcript = ''; 
+        
+        // BU DEĞİŞKENLER ÇOK ÖNEMLİ (Hafıza)
+        let final_transcript = '';
+        let ignore_onend = false;
 
         if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
             alert("Lütfen Google Chrome kullanın.");
@@ -99,23 +102,33 @@ html_code = """
             recognition.interimResults = true; 
         }
 
-        async function baslat() {
+        async function baslat(event) {
+            // Çift tıklama vb. engellemek için
             if (isRecording) return;
-            isRecording = true;
+            if (event) event.preventDefault();
             
+            isRecording = true;
             final_transcript = ''; 
+            
+            // Arayüzü hazırla
             document.getElementById("textBox").value = "";
             document.getElementById("micBtn").classList.add("listening");
             document.getElementById("status").innerText = "Dinliyorum...";
 
-            try { recognition.start(); } catch(e) {}
+            try { recognition.start(); } catch(e) { console.log("Mic zaten açık olabilir"); }
 
+            // Ses kaydı (Dosya) için başlat
             audioChunks = [];
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorder = new MediaRecorder(stream);
-            mediaRecorder.ondataavailable = event => { audioChunks.push(event.data); };
-            mediaRecorder.start();
-            
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                mediaRecorder.ondataavailable = event => { audioChunks.push(event.data); };
+                mediaRecorder.start();
+            } catch(e) {
+                alert("Mikrofon izni verilmedi!");
+            }
+
+            // --- YENİLENMİŞ YAZI YAKALAMA MANTIĞI ---
             recognition.onresult = function(event) {
                 let interim_transcript = '';
                 for (let i = event.resultIndex; i < event.results.length; ++i) {
@@ -125,26 +138,43 @@ html_code = """
                         interim_transcript += event.results[i][0].transcript;
                     }
                 }
-                document.getElementById("textBox").value = final_transcript + interim_transcript;
+                // Hem kesinleşmiş hem de tahmini metni kutuya bas
+                const metin = final_transcript + interim_transcript;
+                document.getElementById("textBox").value = metin;
             };
         }
 
-        function bitir() {
+        function bitir(event) {
             if (!isRecording) return;
+            if (event) event.preventDefault();
+            
             isRecording = false;
 
             document.getElementById("micBtn").classList.remove("listening");
-            document.getElementById("status").innerText = "Kayıt Bitti. Kontrol Et.";
+            document.getElementById("status").innerText = "İşleniyor...";
 
+            // Mikrofonu durdur ama kutudaki yazıyı silme!
             recognition.stop();
-            mediaRecorder.stop();
+            if(mediaRecorder && mediaRecorder.state !== "inactive") {
+                mediaRecorder.stop();
+            }
 
-            mediaRecorder.onstop = () => {
-                currentAudioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                document.getElementById("audioPreview").src = URL.createObjectURL(currentAudioBlob);
-                document.getElementById("micArea").style.display = "none";
-                document.getElementById("editorArea").style.display = "block";
-            };
+            // Medya kaydı bitince editör ekranını aç
+            if(mediaRecorder) {
+                mediaRecorder.onstop = () => {
+                    currentAudioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    document.getElementById("audioPreview").src = URL.createObjectURL(currentAudioBlob);
+                    
+                    // Ekran değiştir
+                    document.getElementById("micArea").style.display = "none";
+                    document.getElementById("editorArea").style.display = "block";
+                    
+                    // Kutu boşsa uyar (Opsiyonel)
+                    if(document.getElementById("textBox").value.trim() === "") {
+                         document.getElementById("textBox").placeholder = "Ses anlaşılamadı, buraya elle yazabilirsin...";
+                    }
+                };
+            }
         }
 
         function iptalEt() {
@@ -158,11 +188,19 @@ html_code = """
 
         function sunucuyaGonder() {
             const editedText = document.getElementById("textBox").value;
-            if (editedText.length < 2) { alert("Metin çok kısa veya boş!"); return; }
             
-            document.getElementById("status").innerText = "Sunucuya gönderiliyor...";
+            if (editedText.length < 1) {
+                alert("Metin boş olamaz!");
+                return;
+            }
+            
+            document.getElementById("status").innerText = "Gönderiliyor...";
             const formData = new FormData();
-            formData.append("ses_dosyasi", currentAudioBlob, "kayit.webm");
+            
+            // Eğer ses dosyası oluşmadıysa (hata vb) boş dosya çökmesin diye kontrol
+            if (currentAudioBlob) {
+                formData.append("ses_dosyasi", currentAudioBlob, "kayit.webm");
+            }
             formData.append("metin", editedText);
 
             fetch('/analiz', { method: 'POST', body: formData })
@@ -170,10 +208,20 @@ html_code = """
             .then(data => {
                 iptalEt(); 
                 document.getElementById("status").innerText = "✅ Kayıt Başarılı!";
-                const logHtml = `<div class="log-item"><b>${data.urun}</b><br>Adet: ${data.adet} | Kağıt: ${data.kagit}<br><audio controls src="${data.ses_url}"></audio></div>`;
+                
+                // Ses linki varsa player koy, yoksa sadece metin
+                let playerHtml = "";
+                if (data.ses_url) {
+                    playerHtml = `<br><audio controls src="${data.ses_url}"></audio>`;
+                }
+                
+                const logHtml = `<div class="log-item"><b>${data.urun}</b><br>Adet: ${data.adet} | Kağıt: ${data.kagit}${playerHtml}</div>`;
                 document.getElementById("logArea").innerHTML = logHtml + document.getElementById("logArea").innerHTML;
             })
-            .catch(err => { alert("Hata: " + err); iptalEt(); });
+            .catch(err => {
+                alert("Hata: " + err);
+                iptalEt();
+            });
         }
     </script>
 </body>
@@ -198,40 +246,42 @@ def analiz():
         except Exception as e:
             print(f"Ses yükleme hatası: {e}")
 
-    # --- AYRIŞTIRMA ---
+    # --- AYRIŞTIRMA (Gelişmiş) ---
+    # 1. Miktar
     miktar = 1
     miktar_match = re.search(r'(\d+)\s*(ADET|TANE)', metin)
     if miktar_match:
         miktar = int(miktar_match.group(1))
-        metin_no_miktar = metin.replace(miktar_match.group(0), "") 
+        metin_temiz = metin.replace(miktar_match.group(0), "") 
     else:
-        metin_no_miktar = metin
+        metin_temiz = metin
 
+    # 2. Kağıt No
     kagit = "-"
-    kagit_match = re.search(r'KAĞIT\s*(\d+)', metin_no_miktar)
+    kagit_match = re.search(r'KAĞIT\s*(\d+)', metin_temiz)
     if kagit_match:
         kagit = kagit_match.group(1)
-        metin_no_miktar = metin_no_miktar.replace(kagit_match.group(0), "")
+        metin_temiz = metin_temiz.replace(kagit_match.group(0), "")
 
-    # Jargon Çevirisi (Ürün Adı Oluşturma)
-    islenen_metin = metin_no_miktar
-    plaka_match = re.search(r'\b(\d{1,3})\s+(\d{3,4})\s+(\d{3,4})\b', islenen_metin)
+    # 3. Plaka
+    plaka_match = re.search(r'\b(\d{1,3})\s+(\d{3,4})\s+(\d{3,4})\b', metin_temiz)
     if plaka_match:
         yeni_format = f"HRS {plaka_match.group(1)} MM {plaka_match.group(2)}X{plaka_match.group(3)}"
-        islenen_metin = islenen_metin.replace(plaka_match.group(0), yeni_format)
+        metin_temiz = metin_temiz.replace(plaka_match.group(0), yeni_format)
 
+    # 4. Jargon
     sozluk = { "A ": "HEA ", "B ": "HEB ", "ST 44": "S275JR", "ST 37": "S235JR", "ST 52": "S355JR", "BOY": "MT", "PLAKA": "HRS", "ON": "10", "YÜZ": "100" }
     for k, v in sozluk.items():
-        islenen_metin = islenen_metin.replace(k, v)
+        metin_temiz = metin_temiz.replace(k, v)
         
-    urun_adi = " ".join(islenen_metin.split())
+    urun_adi = " ".join(metin_temiz.split())
     
-    # Veritabanına Kayıt
+    # Veritabanı
     veri = {
         "kagit_no": kagit,
         "urun_adi": urun_adi,
         "adet": miktar,
-        "ham_ses": request.form.get("metin", ""), # Senin düzenlediğin orijinal metin
+        "ham_ses": request.form.get("metin", ""), 
         "ses_url": public_ses_url
     }
     
@@ -243,25 +293,19 @@ def analiz():
 @app.route("/indir_excel")
 def indir_excel():
     if not SUPABASE_URL: return "Veritabanı bağlı değil"
-    
-    # Verileri çek
     response = supabase.table("stok_loglari").select("*").order("created_at", desc=True).execute()
     df = pd.DataFrame(response.data)
     
-    # --- BURAYI DÜZENLEDİM: Sütun İsimlerini Güzelleştir ---
     column_mapping = {
         "created_at": "TARİH",
         "kagit_no": "KAĞIT NO",
         "urun_adi": "ÜRÜN ADI",
         "adet": "ADET",
-        "ham_ses": "GİRİLEN METİN",   # <-- ARTIK SİLİNMİYOR, ADI DEĞİŞİYOR
+        "ham_ses": "GİRİLEN METİN",
         "ses_url": "SES KAYDI LİNKİ",
         "id": "ID"
     }
-    
-    # Sadece veritabanında var olan sütunları yeniden adlandır
     df = df.rename(columns=column_mapping)
-    
     df.to_excel("stok_sesli.xlsx", index=False)
     return send_file("stok_sesli.xlsx", as_attachment=True)
 
